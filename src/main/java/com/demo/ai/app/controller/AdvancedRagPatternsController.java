@@ -2,9 +2,16 @@ package com.demo.ai.app.controller;
 
 import com.demo.ai.app.tools.CourseSearchTool;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.openai.OpenAiChatModel;
+import org.springframework.ai.rag.advisor.RetrievalAugmentationAdvisor;
+import org.springframework.ai.rag.generation.augmentation.ContextualQueryAugmenter;
+import org.springframework.ai.rag.postretrieval.document.DocumentPostProcessor;
+import org.springframework.ai.rag.preretrieval.query.transformation.QueryTransformer;
+import org.springframework.ai.rag.preretrieval.query.transformation.RewriteQueryTransformer;
+import org.springframework.ai.rag.retrieval.search.VectorStoreDocumentRetriever;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.filter.Filter;
@@ -38,7 +45,10 @@ public class AdvancedRagPatternsController {
     @Autowired
     private CourseSearchTool courseSearchTool;
 
+    private OpenAiChatModel chatModel;
+
     public AdvancedRagPatternsController(OpenAiChatModel chatModel) {
+        this.chatModel = chatModel;
 
         this.chatClient = ChatClient.create(chatModel);
     }
@@ -302,76 +312,148 @@ public class AdvancedRagPatternsController {
 
         return answerWithContext(query, rerankedDoc);
     }
+
     /**
-     @GetMapping("/rerank") public String rerank(@RequestParam String query) {
-     // 1. get a wider set of candidates
-     List<Document> maxChunks = vectorStore.similaritySearch(SearchRequest.builder()
-     .query(query)
-     .topK(10)
-     .build());
-
-     if (maxChunks.isEmpty()) {
-     return "No Courses found based your request";
-     }
-     // 2. number + trim each chunk (to ~250 chars) to save tokens
-     StringBuilder numbered = new StringBuilder();
-     for (int i = 0; i < maxChunks.size(); i++) {
-     String chunkSnippet = maxChunks.get(i).getText();
-     if (chunkSnippet.length() > 300) {
-     chunkSnippet.substring(0, 300);
-     }
-     numbered.append(i + 1)
-     .append(", ")
-     .append(chunkSnippet)
-     .append("\n\n");
-     }
-     // 3. ask the LLM to rank and return only the best 3 numbers
-     //ask llm to ranking 9, 4, 6
-     String llmRankingResponse = chatClient
-     .prompt()
-     .system(
-     """
-     You rank text chunks by relevance to a user query.
-     Return ONLY the numbers of the best 3 chunks.
-     Example: 3,7,1
-     """
-     )
-     .user("Query" + query + "Chunks  " + numbered)
-     .call()
-     .content();
-     System.out.println("LLM Ranking response ==> " + llmRankingResponse);
-
-     // 4. parse the numbers back into documents (regex over the ranking string)
-     List<Document> rerankedDoc = new ArrayList<>();
-     Matcher matcher = Pattern.compile("\\d+")
-     .matcher(llmRankingResponse);
-
-     while (matcher.find() && rerankedDoc.size() < 3) {
-
-     int index = Integer.parseInt(matcher.group()) - 1;
-
-     if (index >= 0 && index < maxChunks.size()) {
-     rerankedDoc.add(maxChunks.get(index));
-     }
-     // 5. resilience: if the LLM gave nothing usable, fall back to the first 3
-     if (rerankedDoc.isEmpty()) {
-
-     rerankedDoc = maxChunks.subList(
-     0,
-     Math.min(3, maxChunks.size())
-     );
-     }
-     }
-     System.out.println("Final Re rank chunks");
-     for (int i = 0; i < rerankedDoc.size(); i++) {
-     System.out.println("Rank" + (i + 1));
-     System.out.println(rerankedDoc.get(i).getText());
-     }
-     return answerWithContext(query, rerankedDoc);
-
-
-     }
+     * @GetMapping("/rerank") public String rerank(@RequestParam String query) {
+     * // 1. get a wider set of candidates
+     * List<Document> maxChunks = vectorStore.similaritySearch(SearchRequest.builder()
+     * .query(query)
+     * .topK(10)
+     * .build());
+     * <p>
+     * if (maxChunks.isEmpty()) {
+     * return "No Courses found based your request";
+     * }
+     * // 2. number + trim each chunk (to ~250 chars) to save tokens
+     * StringBuilder numbered = new StringBuilder();
+     * for (int i = 0; i < maxChunks.size(); i++) {
+     * String chunkSnippet = maxChunks.get(i).getText();
+     * if (chunkSnippet.length() > 300) {
+     * chunkSnippet.substring(0, 300);
+     * }
+     * numbered.append(i + 1)
+     * .append(", ")
+     * .append(chunkSnippet)
+     * .append("\n\n");
+     * }
+     * // 3. ask the LLM to rank and return only the best 3 numbers
+     * //ask llm to ranking 9, 4, 6
+     * String llmRankingResponse = chatClient
+     * .prompt()
+     * .system(
+     * """
+     * You rank text chunks by relevance to a user query.
+     * Return ONLY the numbers of the best 3 chunks.
+     * Example: 3,7,1
+     * """
+     * )
+     * .user("Query" + query + "Chunks  " + numbered)
+     * .call()
+     * .content();
+     * System.out.println("LLM Ranking response ==> " + llmRankingResponse);
+     * <p>
+     * // 4. parse the numbers back into documents (regex over the ranking string)
+     * List<Document> rerankedDoc = new ArrayList<>();
+     * Matcher matcher = Pattern.compile("\\d+")
+     * .matcher(llmRankingResponse);
+     * <p>
+     * while (matcher.find() && rerankedDoc.size() < 3) {
+     * <p>
+     * int index = Integer.parseInt(matcher.group()) - 1;
+     * <p>
+     * if (index >= 0 && index < maxChunks.size()) {
+     * rerankedDoc.add(maxChunks.get(index));
+     * }
+     * // 5. resilience: if the LLM gave nothing usable, fall back to the first 3
+     * if (rerankedDoc.isEmpty()) {
+     * <p>
+     * rerankedDoc = maxChunks.subList(
+     * 0,
+     * Math.min(3, maxChunks.size())
+     * );
+     * }
+     * }
+     * System.out.println("Final Re rank chunks");
+     * for (int i = 0; i < rerankedDoc.size(); i++) {
+     * System.out.println("Rank" + (i + 1));
+     * System.out.println(rerankedDoc.get(i).getText());
+     * }
+     * return answerWithContext(query, rerankedDoc);
+     * <p>
+     * <p>
+     * }
      **/
+
+    //Pattern 6: RetrievalAugmentationAdvisor (modern RAG)
+    /**
+     * Pipeline Ordering: The RetrievalAugmentationAdvisor manages the execution flow:
+     *
+     * 1 Transform: QueryTransformer refines the input.
+     *
+     * 2 Retrieve: DocumentRetriever fetches candidates from Redis.
+     *
+     * 3 Process: DocumentPostProcessor cleans/reranks the candidates.
+     *
+     * 4 Augment: QueryAugmenter injects the final context into the LLM prompt.
+     */
+    @GetMapping("/mordern-rag")
+    public String modernRag(@RequestParam String query) {
+        System.out.println("User query original: " + query);
+
+
+        // 1. Query Transformer: Rewrite/expand query for better retrieval accuracy
+        QueryTransformer queryTransformer = RewriteQueryTransformer.builder()
+                .chatClientBuilder(ChatClient.builder(chatModel))
+                .build();
+
+        // 2. Document Post-Processor: Filter or rerank retrieved documents
+        // Example: Remove documents that are too short to be useful
+        DocumentPostProcessor lengthFilter = (q, documents) -> documents.stream()
+                .filter(doc -> doc.getText().length() > 50)
+                .toList();
+
+        //3  Build the Advisor using the pattern from your image
+        var ragAdvisor = RetrievalAugmentationAdvisor.builder()
+                .queryTransformers(List.of(queryTransformer)) // Added Transformer
+                .documentRetriever(VectorStoreDocumentRetriever.builder()
+                        .vectorStore(vectorStore)
+                        .topK(3)
+                        .build())
+                .documentPostProcessors(List.of(lengthFilter)) // Added Post-Processor
+                .queryAugmenter(
+                        ContextualQueryAugmenter.builder()
+                                //allow the LLM to answer normaly if no doc is found in vector db
+                                .allowEmptyContext(true)
+                                .build())
+                .build();
+
+        // 4. Build and call the ChatClient
+        ChatClient modernchatClient = ChatClient.builder(chatModel)
+                .defaultSystem("""
+                        You are ABC Tech helpful course advisor.
+                        Use only the provided course catalog context.
+                        Mention course name, price, duration, and level.
+                        
+                        If the user's question is not about courses
+                        (like a greeting or a general request),\s
+                        you may answer it normally using your own knowledge.
+                        
+                        If the question is about courses and the information is not in the provided context,\s
+                        politely say you don't have that information.
+                        """)
+                .defaultAdvisors(ragAdvisor) // Using defaultAdvisors for the client
+                .build();
+
+
+        // 3. Execute the call to get the answer
+        String answer = modernchatClient
+                .prompt(query)
+                .call()
+                .content();
+
+        System.out.println("Final Answer: " + answer);
+        return answer;
+    }
 
 
 }

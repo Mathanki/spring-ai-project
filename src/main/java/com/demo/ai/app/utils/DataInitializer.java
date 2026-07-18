@@ -64,20 +64,15 @@ public class DataInitializer {
 
     @PostConstruct
     public void initData() {
-        // 1. Skip initialization if data already exists to prevent duplication
         List<Document> existingDocs = vectorStore.similaritySearch(
                 SearchRequest.builder().query("ABCTech").topK(1).build());
+
         if (existingDocs != null && !existingDocs.isEmpty()) {
-            System.out.println("Data already exists in vector store. Skipping initialization.");
             return;
         }
 
-        System.out.println("Initializing data from Courses.txt...");
         try {
-            List<String> lines = Files.readAllLines(
-                    new ClassPathResource("Courses.txt").getFile().toPath()
-            );
-
+            List<String> lines = Files.readAllLines(new ClassPathResource("Courses.txt").getFile().toPath());
             List<Document> documents = new ArrayList<>();
             Map<String, Object> currentMetadata = new HashMap<>();
             StringBuilder contentBuilder = new StringBuilder();
@@ -85,7 +80,6 @@ public class DataInitializer {
             for (String line : lines) {
                 line = line.trim();
                 if (line.isEmpty()) {
-                    // When an empty line is hit, save the completed document
                     if (contentBuilder.length() > 0) {
                         documents.add(new Document(contentBuilder.toString(), new HashMap<>(currentMetadata)));
                         contentBuilder.setLength(0);
@@ -94,26 +88,27 @@ public class DataInitializer {
                 } else if (line.startsWith("Title:") || line.startsWith("Description:")) {
                     contentBuilder.append(line).append(" ");
                 } else if (line.startsWith("Level:")) {
-                    currentMetadata.put("level", line.replace("Level:", "").trim());
+                    String val = line.replace("Level:", "").trim();
+                    currentMetadata.put("level", val);
+                    contentBuilder.append("Level: ").append(val).append(" "); // Now included in text
                 } else if (line.startsWith("Category:")) {
-                    currentMetadata.put("category", line.replace("Category:", "").trim());
+                    String val = line.replace("Category:", "").trim();
+                    currentMetadata.put("category", val);
+                    contentBuilder.append("Category: ").append(val).append(" "); // Now included in text
+                } else if (line.startsWith("Duration:")) {
+                    String val = line.replace("Duration:", "").trim();
+                    currentMetadata.put("duration", val);
+                    contentBuilder.append("Duration: ").append(val).append(" "); // ADDED THIS
                 } else if (line.startsWith("Price:")) {
-                    // Parse price as Integer for numeric filtering
-                    String priceStr = line.replace("Price:", "").replace("$", "").trim();
-                    currentMetadata.put("price", Integer.parseInt(priceStr));
+                    String p = line.replace("Price:", "").replace("$", "").trim();
+                    currentMetadata.put("price", Integer.parseInt(p));
+                    contentBuilder.append("Price: $").append(p).append(" "); // Now included in text
                 }
             }
-
-            // Add the final document if the file didn't end with an empty line
-            if (contentBuilder.length() > 0) {
-                documents.add(new Document(contentBuilder.toString(), currentMetadata));
-            }
-
+            if (contentBuilder.length() > 0) documents.add(new Document(contentBuilder.toString(), currentMetadata));
             vectorStore.add(documents);
-            System.out.println("Successfully ingested " + documents.size() + " courses.");
-
         } catch (IOException e) {
-            System.err.println("Error reading Courses.txt: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 }
